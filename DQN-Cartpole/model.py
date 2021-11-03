@@ -166,7 +166,7 @@ class DSNN(nn.Module):
                 # calculate the spikes for all layers but the last layer (decoding='potential')
                 if l < (len(self.weights) - 1):
                     mthr = new_mem - self.threshold
-                    out = self.spike_fn(mthr).detach()
+                    out = self.spike_fn(mthr)
                     c = (mthr > 0)
                     new_mem[c] = 0
                 else:
