@@ -1,15 +1,17 @@
+import os
 import sys
 import gym
 import torch
 import random
-import sunblaze_envs
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
+#import sunblaze_envs
 
 import numpy as np
 import torch.nn.functional as F
 
 from model import DSNN
 from collections import namedtuple, deque
-
 
 sys.path.append('../')
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -77,7 +79,8 @@ class Agent:
                  learning_rate, num_episodes, max_steps, i_run, result_dir, seed, tau, SQN=False,
                  random=False, quantization=False):
         if random:
-            self.env = sunblaze_envs.make('SunblazeCartPoleRandomExtreme-v0')
+            #self.env = sunblaze_envs.make('SunblazeCartPoleRandomExtreme-v0')
+            self.env = gym.make("CartPole-v0")
         else:
             self.env = gym.make(env)
         self.env.seed(seed)
@@ -118,6 +121,15 @@ class Agent:
         self.t_step = 0
         self.t_step_total = 0
 
+        # Init actionspace visualization if necessary
+        self.visualize_actionspace = False
+        if self.visualize_actionspace:
+            self.state_list = np.zeros((1,4))
+            self.as_dir = "/content/drive/My Drive/Uni/MasterArbeit/dsqn_examples/" + \
+                          "results/action_space_{}".format(self.env.unwrapped.spec.id)
+            if not os.path.exists(self.as_dir):
+                os.mkdir(self.as_dir)
+
     def dequantize_tensor(self, q_x):
         return q_x.scale * (q_x.tensor.float() - q_x.zero_point)
 
@@ -155,8 +167,21 @@ class Agent:
         else:
             return random.choice(np.arange(self.architecture[-1]))
 
+    def plot_hist(self, hist_data,i):
+      # plot the space values for the respective dimension for assessment
+        fig, ax = plt.subplots(1,1)
+        plt.grid(True)
+        _ = plt.hist(hist_data, bins=200) 
+        ax.xaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))      
+        plt.title("Histogram of dimension {}".format(i))  
+        plt.savefig(self.as_dir + '/env_hist_dim{}.png'.format(i), dpi=1000)
+        plt.close(fig)
+
     def step(self, state, action, reward, next_state, done):
         self.memory.add(state, action, reward, next_state, done)
+
+        if self.visualize_actionspace:
+            self.state_list = np.vstack((self.state_list,state))
 
         # Learn every UPDATE_EVERY time steps.
         self.t_step = (self.t_step + 1) % self.update_every
@@ -165,6 +190,10 @@ class Agent:
             if len(self.memory) > self.batch_size:
                 experiences = self.memory.sample()
                 self.optimize_model(experiences)
+        if self.visualize_actionspace and self.t_step_total  % 1000 == 0:
+            # If enough samples are available in memory, get random subset and learn
+            for i in range(4):
+                self.plot_hist(self.state_list[:,i],i)
 
     def optimize_model(self, experiences):
         states, actions, rewards, next_states, dones = experiences
@@ -209,6 +238,9 @@ class Agent:
 
         for i_episode in range(1, self.num_episodes + 1):
             state = self.env.reset()
+
+            np.round(state,1)
+
             score = 0
             for t in range(self.max_steps):
                 self.t_step_total += 1
@@ -247,6 +279,7 @@ class Agent:
 
         print('Best 100 episode average: ', best_average, ' reached at episode ',
               best_average_after, '. Model saved in folder best.')
+        
         return smoothed_scores, scores, best_average_after
 
 

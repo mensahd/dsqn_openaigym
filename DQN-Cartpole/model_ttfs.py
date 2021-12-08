@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 
 from matplotlib.gridspec import GridSpec
 
+from sklearn.preprocessing import MinMaxScaler
+
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -90,12 +92,17 @@ class SurrGradSpike(torch.autograd.Function):
 
 
 class DSNN(nn.Module):
-    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time):
+    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler=MinMaxScaler):
         """
 
         """
+
+        self.two_neuron = False
+
         self.architecture = architecture[:]
-        self.architecture[0] = self.architecture[0]*2
+
+        if self.two_neuron:
+            self.architecture[0] = self.architecture[0]*2
 
         self.seed = random.seed(seed)
 
@@ -112,6 +119,7 @@ class DSNN(nn.Module):
             self.weights.append(torch.empty((self.architecture[i], self.architecture[i + 1]),
                                             device=device, dtype=torch.float, requires_grad=True))
             torch.nn.init.normal_(self.weights[i], mean=0.0, std=1)
+        self.scaler = scaler
 
     def forward(self, inputs, loihi=False):
         syn = []
@@ -125,6 +133,20 @@ class DSNN(nn.Module):
         # Here we define two lists which we use to record the membrane potentials and output spikes
         mem_rec = []
         spk_rec = []
+
+        time_step = 1e-3 ### in accordance to the set SNN yperparameter 
+        tau_eff = 20e-3/time_step
+
+        # We prep the input for two-neuron encoding
+        input = inputs.detach().clone()
+
+        if self.two_neuron:
+            transformed_input = self.transform_two_inputs(input)
+        else:
+            transformed_input = torch.from_numpy(self.scaler.transform(input.cpu()))
+
+        spike_train = self.current2firing_time(transformed_input, tau_eff, tmax=self.simulation_time-1)
+        spike_train = np.ceil(spike_train).to(device)
 
         # Here we loop over time
         for t in range(self.simulation_time):
@@ -140,26 +162,20 @@ class DSNN(nn.Module):
 
             # We take the input as it is, multiply is by the weights, and we inject the outcome
             # as current in the neurons of the first hidden layer
-            input = inputs.detach().clone()
-
-            bigger_zero = input.where(input > 0, torch.tensor(0.).to(device)).bool()
-            smaller_zero = input.where(input < 0, torch.tensor(0.).to(device)).bool()
-            bigger_input = input.where(bigger_zero, torch.tensor(0.).to(device))
-            smaller_input = input * -1
-            smaller_input = smaller_input.where(smaller_zero, torch.tensor(0.).to(device))
-            split_input = torch.cat((bigger_input, smaller_input),dim=1)
-            input = split_input
+            
 
             # loop over layers
             for l in range(len(self.weights)):
                 if loihi:
                     # define impulse
                     if l == 0:
+                        input = torch.where(spike_train == t, 1., 0.).to(device)
                         h = torch.einsum("ab,bc->ac", [input, self.weights[0]])
                     else:
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]*64])
                 else:
                     if l == 0:
+                        input = torch.where(spike_train == t, 1., 0.)
                         h = torch.einsum("ab,bc->ac", [input, self.weights[0]])
                     else:
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]])
@@ -190,6 +206,53 @@ class DSNN(nn.Module):
 
         # return the final recorded membrane potential (len(mem_rec)-1) in the output layer (-1)
         return mem_rec[-1][-1], mem_rec, spk_rec
+
+    def current2firing_time(self, inputs, tau=20, tmax=1.0, epsilon=1e-7):
+        """ Computes the firing times of a spike train based on the poisson distribution
+
+        Args:
+        x -- The "current" values
+
+        Keyword args:
+        tau -- The membrane time constant of the LIF neuron to be charged
+        tmax -- The maximum time returned 
+        epsilon -- A generic (small) epsilon > 0
+
+        Returns:
+        Time to first spike for each "current" x
+        """
+        idx = inputs < self.threshold
+        clipped_inputs = np.clip(inputs.cpu(),self.threshold+epsilon,1e9)
+        T = tau*np.log(clipped_inputs/(clipped_inputs-self.threshold))
+        T = np.clip(T, 0, tmax)
+        T[idx] = tmax
+        return T
+
+    def normalize_inputs(self, inputs, limits):
+        differences = [element[1]- element[0] for element in limits]
+
+        shifted_array = inputs - [ element[0] for element in limits]
+        normalized_array = shifted_array / differences
+        
+        return normalized_array
+
+    def transform_two_inputs(self, inputs):
+        bigger_zero = inputs.where(inputs > 0, torch.tensor(0.).to(device)).bool()
+        smaller_zero = inputs.where(inputs < 0, torch.tensor(0.).to(device)).bool()
+        bigger_input = inputs.where(bigger_zero, torch.tensor(0.).to(device))
+        smaller_input = inputs * -1
+        smaller_input = smaller_input.where(smaller_zero, torch.tensor(0.).to(device))
+        split_input = torch.cat((bigger_input, smaller_input),dim=1)
+        
+        return split_input
+
+    def init_scaler(self):
+        #[position of cart, velocity of cart, angle of pole, rotation rate of pole]
+        limits = np.asarray([[-4.8, -3, -0.418 , -3],
+                              [4.8, 3 , 0.418, -3]])
+        self.scaler = MinMaxScaler()
+        # transform data
+        self.scaler.fit(limits)
 
     def plot_voltage_traces(self, mem, spk=None, dim=(1, 1), spike_height=5):
         gs = GridSpec(*dim)
