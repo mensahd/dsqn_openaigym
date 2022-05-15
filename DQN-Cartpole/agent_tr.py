@@ -83,7 +83,7 @@ class Agent:
     def __init__(self, env, policy_net, target_net, architecture, batch_size, memory_size, gamma,
                  eps_start, eps_end, eps_decay, update_every, target_update_frequency, optimizer,
                  learning_rate, num_episodes, max_steps, i_run, result_dir, seed, tau, SQN=False,
-                 random=False, quantization=False):
+                 random=False, quantization=False, train_dir="/tmp"):
         if random:
             # self.env = sunblaze_envs.make('SunblazeCartPoleRandomExtreme-v0')
             self.env = gym.make("CartPole-v0")
@@ -127,10 +127,10 @@ class Agent:
         self.t_step = 0
         self.t_step_total = 0
 
+        self.creation_run = True
         # Init actionspace visualization if necessary
-        self.creation_run = False
-
         self.visualize_environment_states = False
+        self.train_dir = train_dir + "/training/"
         if self.visualize_environment_states:
             self.state_list = np.zeros((1, 4))
             self.as_dir = "/content/drive/My Drive/Uni/MasterArbeit/dsqn_examples/" + \
@@ -250,10 +250,11 @@ class Agent:
 
         if self.creation_run:
             total_training_data_points = 0
-            with open('image_.csv', 'w', newline='') as csvfile:
+            os.makedirs(self.train_dir, exist_ok=True)
+            with open(f'{self.train_dir}{self.env.unwrapped.spec.id}_labels.csv', 'w', newline='') as csvfile:
                 csv_writer = csv.writer(csvfile)
 
-                fieldnames = ['image_name', 'cart_position', 'cart_velocity', 'pole_angle', 'pole_rotation_rate']
+                fieldnames = ['image_name', 'cart_position', 'cart_velocity', 'pole_angle', 'pole_rotation_rate', 'frame_difference']
                 csv_writer.writerow(fieldnames)
 
         for i_episode in range(1, self.num_episodes + 1):
@@ -264,17 +265,18 @@ class Agent:
             score = 0
 
             if self.creation_run:
-                csvfile = open(f'{self.env}_labels.csv', 'w', newline='')
+                csvfile = open(f'{self.train_dir}{self.env.unwrapped.spec.id}_labels.csv', 'a', newline='')
                 csv_writer = csv.writer(csvfile)
                 frames = []
+                next_frame_number = self.max_steps
 
             for t in range(self.max_steps):
 
                 if self.creation_run:
-                    image_name = f"{self.env}_{i_episode}_{total_training_data_points}.jpg"
+                    image_name = f"{self.env.unwrapped.spec.id}_{i_episode}_{total_training_data_points}.jpg"
                     # creates the training dataset if necessary
                     next_frame_number, total_training_data_points = self.create_training_images(frames, t, csv_writer,
-                                                                                            image_name, state, total_training_data_points)
+                                                                                            image_name, state, total_training_data_points,next_frame_number)
 
                 self.t_step_total += 1
                 action = self.select_action(state, eps)
@@ -320,26 +322,39 @@ class Agent:
         print('Best 100 episode average: ', best_average, ' reached at episode ',
               best_average_after, '. Model saved in folder best.')
 
-        return smoothed_scores, scores, best_average_after, best_average
+        return smoothed_scores, scores, best_average_after
 
 
-    def create_training_images(self, frames, t, csv_writer , img_name, state, total_nr_samples, next_frame_number):
+    def create_training_images(self, frames, current_frame_number, csv_writer, img_name, state, total_nr_samples, next_frame_number):
+        def crop_center(img, cropx, cropy):
+            y, x, _ = img.shape
+            startx = x // 2 - (cropx // 2)
+            starty = y // 2 - (cropy // 2)
+            return img[starty:starty + cropy, startx:startx + cropx]
+
+        frame_difference = 2
         if np.random.random() < (1 / 50):
-            next_frame_number = t + 2
+            next_frame_number = current_frame_number + frame_difference
             frames.append(self.env.render(mode="rgb_array"))
+            self.env.close()
 
-        elif next_frame_number % t == 0:
+        elif current_frame_number != 0 and current_frame_number % next_frame_number == 0:
             frames.append(self.env.render(mode="rgb_array"))
+            self.env.close()
 
             state_list = [ val for val in state]
-            csv_writer.writerow(img_name, state_list)
+            state_data = [img_name, frame_difference]
+            state_data[1:1] = state_list
+            csv_writer.writerow(state_data)
 
-            differential_frame = frames[-1] - frames[-2]
+            frame1 = crop_center(frames[-1], 300, 250)
+            frame2 = crop_center(frames[-2], 300, 250)
+            differential_frame = frame1 - frame2
 
-            plt.figure(figsize=(frames[0].shape[1] / 72.0, frames[0].shape[0] / 72.0), dpi=72)
+            plt.figure(figsize=(frame1.shape[1] / 64.0, frame1.shape[0] / 64.0), dpi=72)
             plt.imshow(differential_frame)
             plt.axis('off')
-            plt.savefig(img_name)
+            plt.savefig(self.train_dir + img_name)
             plt.close()
 
             return self.max_steps, total_nr_samples + 1

@@ -1,3 +1,5 @@
+import math
+
 import torch
 import random
 
@@ -92,17 +94,27 @@ class SurrGradSpike(torch.autograd.Function):
 
 
 class DSNN(nn.Module):
-    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = MinMaxScaler):
+    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = MinMaxScaler, two_neuron = False, population_coding = False, population_size=1, add_bias = True ):
         """
 
         """
 
-        self.two_neuron = False
+        self.two_neuron = two_neuron
+        self.add_bias = add_bias
+        self.population_coding = population_coding
+
+        self.decoding = "rate"
 
         self.architecture = architecture[:]
 
+        self.population_size = population_size
+
         if self.two_neuron:
             self.architecture[0] = self.architecture[0]*2
+        if self.population_coding:
+            self.architecture[0] = self.architecture[0] * self.population_size
+        if self.add_bias:
+            self.architecture[0] = self.architecture[0] + 1
 
         self.seed = random.seed(seed)
 
@@ -121,6 +133,10 @@ class DSNN(nn.Module):
             torch.nn.init.normal_(self.weights[i], mean=0.0, std=1)
         self.scaler = scaler
 
+        if self.scaler == MinMaxScaler and self.two_neuron:
+            self.scaler.get_feature_names_out()
+
+
     def forward(self, inputs, loihi=False):
         syn = []
         mem = []
@@ -134,24 +150,42 @@ class DSNN(nn.Module):
         mem_rec = []
         spk_rec = []
 
-        time_step = 1e-3 ### in accordance to the set SNN yperparameter 
+        time_step = 1e-3 ### in accordance to the set SNN hyperparameter
         tau_eff = 20e-3/time_step
 
         # We prep the input for two-neuron encoding
         input = inputs.detach().clone()
 
+        transformed_input = input
+
+        if self.scaler:
+            transformed_input = torch.from_numpy(self.scaler.transform(input.cpu())).to(device)
+        ## Two neuron encoding with split positive and negative inputs
         if self.two_neuron:
             transformed_input = self.transform_two_inputs(input)
-        else:
-            transformed_input = torch.from_numpy(self.scaler.transform(input.cpu())).to(device)
+        if self.population_coding:
+            #
+            bracket_size = 1/self.population_size
+            deviation = bracket_size
+            shift = bracket_size/2.0
+            value_centers = np.array([i * bracket_size for i in range(self.population_size)]) + shift
+            input_pops = np.tile(value_centers, transformed_input.size(dim=1))
+            transformed_input = torch.repeat_interleave(transformed_input, self.population_size, dim=-1)
+            denom_vals = np.array(transformed_input-input_pops)
+            transformed_input = torch.tensor(np.exp((-0.5)*np.power((denom_vals)/deviation, 2)))
+        if self.add_bias:
+            bias_factor = 1
+            transformed_input = torch.hstack([transformed_input,  (torch.ones((transformed_input.size(dim=0),1))*bias_factor).to(device)])
 
         # We take the input and create a poisson distro for the input on 
         # every timestep, that will be fed into the first level
 
         dims = (self.simulation_time, transformed_input.shape[0],transformed_input.shape[1])
-        poisson_distro = torch.tensor(np.random.uniform(low=0, high=1, 
+        random_distribution = torch.tensor(np.random.uniform(low=0, high=1,
                   size=dims),device=device)
-        spike_train = (poisson_distro <= transformed_input).float()
+
+        spike_train = (transformed_input > random_distribution).float().to(device)
+        reconstruct_input = np.sum(spike_train.cpu().numpy(), axis=0) / self.simulation_time
 
         # Here we loop over time
         for t in range(self.simulation_time):
@@ -161,8 +195,8 @@ class DSNN(nn.Module):
 
             if t == 0:
                 for l in range(len(self.weights)):
-                    mem_rec[-1].append(mem[l])
-                    spk_rec[-1].append(mem[l])
+                    mem_rec[-1].append(mem[l]*self.batch_size)
+                    spk_rec[-1].append(mem[l]*self.batch_size)
                 continue
 
             # We take the input as it is, multiply is by the weights, and we inject the outcome
@@ -201,6 +235,8 @@ class DSNN(nn.Module):
                     new_mem[c] = 0
                 else:
                     # else reset is 0 (= no reset)
+                    mthr = new_mem - self.threshold
+                    out = self.spike_fn(mthr)
                     c = torch.zeros_like(new_mem, dtype=torch.bool, device=device)
 
                 mem[l] = new_mem
@@ -210,6 +246,8 @@ class DSNN(nn.Module):
                 spk_rec[-1].append(out)
 
         # return the final recorded membrane potential (len(mem_rec)-1) in the output layer (-1)
+        final_layer_output = self.decode_output_layer(mem_rec, spk_rec)
+
         return mem_rec[-1][-1], mem_rec, spk_rec
 
     def current2firing_time(self, inputs, tau=20, tmax=1.0, epsilon=1e-7):
@@ -250,6 +288,25 @@ class DSNN(nn.Module):
         split_input = torch.cat((bigger_input, smaller_input),dim=1)
         
         return split_input
+
+    def decode_output_layer(self, mem_rec, spk_rec):
+        def first_spike(train, axis, invalid_val=self.simulation_time):
+            spikes_times = np.where(train.any(axis=axis), train.argmax(axis=axis), invalid_val)
+            np.argmin(spikes_times)
+
+        if self.decoding == "potential":
+            return mem_rec[-1][-1]
+        elif self.decoding == "ttfs":
+            return first_spike(spk_rec, axis=1)
+        elif self.decoding == "rate":
+            last_layer = [rec[-1] for rec in spk_rec]
+            detached_last_layer = torch.stack(last_layer).cpu().detach().numpy()
+            return np.sum(detached_last_layer, axis=0) / self.simulation_time
+        elif self.decoding == "population":
+            return mem_rec[-1][-1]  ##TODO
+        else:
+            return mem_rec[-1][-1]
+
 
     def init_scaler(self):
         #[position of cart, velocity of cart, angle of pole, rotation rate of pole]
