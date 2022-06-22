@@ -94,7 +94,7 @@ class SurrGradSpike(torch.autograd.Function):
 
 
 class DSNN(nn.Module):
-    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = MinMaxScaler, two_neuron = False, population_coding = False, population_size=1, add_bias = True ):
+    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = MinMaxScaler, two_neuron = False, population_coding = False, population_size=1, add_bias = True, decoding="potential" ):
         """
 
         """
@@ -103,7 +103,7 @@ class DSNN(nn.Module):
         self.add_bias = add_bias
         self.population_coding = population_coding
 
-        self.decoding = "rate"
+        self.decoding = decoding
 
         self.architecture = architecture[:]
 
