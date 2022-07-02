@@ -186,7 +186,7 @@ class DSNN(nn.Module):
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]*64])
                 else:
                     if l == 0:
-                        input = torch.where(spike_train == t, 1., 0.).to(device)
+                        input = spike_train[t]
                         h = torch.einsum("ab,bc->ac", [input, self.weights[0]])
                     else:
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]])
@@ -346,7 +346,7 @@ class DSNN(nn.Module):
 
         zeros = torch.zeros((input.shape[0], self.simulation_time))
 
-
+        #TODO: encode spiking correctly
         #spike_values = torch.ones(spike_train.shape, dtype=torch.long)
 
         return spike_train
