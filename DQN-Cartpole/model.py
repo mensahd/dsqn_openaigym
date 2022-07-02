@@ -170,7 +170,6 @@ class DSNN(nn.Module):
                 for l in range(len(self.weights)):
                     mem_rec[-1].append(mem[l]*self.batch_size)
                     spk_rec[-1].append(mem[l]*self.batch_size)
-                continue
 
             # We take the input as it is, multiply is by the weights, and we inject the outcome
             # as current in the neurons of the first hidden layer
@@ -187,7 +186,7 @@ class DSNN(nn.Module):
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]*64])
                 else:
                     if l == 0:
-                        input = spike_train[t]
+                        input = torch.where(spike_train == t, 1., 0.).to(device)
                         h = torch.einsum("ab,bc->ac", [input, self.weights[0]])
                     else:
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]])
@@ -345,8 +344,10 @@ class DSNN(nn.Module):
         spike_train = self.current2firing_time(input, tau_eff, tmax=self.simulation_time - 1)
         spike_train = np.ceil(spike_train).to(device)
 
-        input = torch.where(spike_train == t, 1., 0.).to(device)
-        spike_values = torch.ones(spike_train.shape, dtype=torch.long)
+        zeros = torch.zeros((input.shape[0], self.simulation_time))
+
+
+        #spike_values = torch.ones(spike_train.shape, dtype=torch.long)
 
         return spike_train
 
