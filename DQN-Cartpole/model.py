@@ -1,3 +1,5 @@
+import math
+
 import torch
 import random
 
@@ -7,6 +9,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from matplotlib.gridspec import GridSpec
+
+from sklearn.preprocessing import MinMaxScaler
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -90,11 +94,29 @@ class SurrGradSpike(torch.autograd.Function):
 
 
 class DSNN(nn.Module):
-    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time):
+    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = MinMaxScaler,
+                 two_neuron = False, population_coding = False, population_size=1, add_bias = False, encoding="potential", decoding="potential" ):
         """
 
         """
-        self.architecture = architecture
+
+        self.two_neuron = two_neuron
+        self.add_bias = add_bias
+        self.population_coding = population_coding
+
+        self.encoding = encoding
+        self.decoding = decoding
+
+        self.architecture = architecture[:]
+
+        self.population_size = population_size
+
+        if self.two_neuron:
+            self.architecture[0] = self.architecture[0]*2
+        if self.population_coding:
+            self.architecture[0] = self.architecture[0] * self.population_size
+        if self.add_bias:
+            self.architecture[0] = self.architecture[0] + 1
 
         self.seed = random.seed(seed)
 
@@ -111,6 +133,11 @@ class DSNN(nn.Module):
             self.weights.append(torch.empty((self.architecture[i], self.architecture[i + 1]),
                                             device=device, dtype=torch.float, requires_grad=True))
             torch.nn.init.normal_(self.weights[i], mean=0.0, std=1)
+        self.scaler = scaler
+
+        # if self.scaler == MinMaxScaler and self.two_neuron:
+        #    self.scaler.get_feature_names_out()
+
 
     def forward(self, inputs, loihi=False):
         syn = []
