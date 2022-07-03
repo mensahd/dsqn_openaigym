@@ -160,9 +160,8 @@ class DSNN(nn.Module):
 
             if t == 0:
                 for l in range(len(self.weights)):
-                    mem_rec[-1].append(mem[l])
-                    spk_rec[-1].append(mem[l])
-                continue
+                    mem_rec[-1].append(mem[l]*self.batch_size)
+                    spk_rec[-1].append(mem[l]*self.batch_size)
 
             # We take the input as it is, multiply is by the weights, and we inject the outcome
             # as current in the neurons of the first hidden layer
@@ -198,6 +197,8 @@ class DSNN(nn.Module):
                     new_mem[c] = 0
                 else:
                     # else reset is 0 (= no reset)
+                    mthr = new_mem - self.threshold
+                    out = self.spike_fn(mthr)
                     c = torch.zeros_like(new_mem, dtype=torch.bool, device=device)
 
                 mem[l] = new_mem
