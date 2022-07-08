@@ -158,6 +158,8 @@ class DSNN(nn.Module):
         # We prep the input for two-neuron encoding
         input = inputs.detach().clone()
 
+        #TODO: all batches have the exact same grad at the end, even though they are different when using a single input approach
+
         spike_train = self.encode_input_layer(input)
 
         # Here we loop over time
@@ -186,8 +188,8 @@ class DSNN(nn.Module):
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]*64])
                 else:
                     if l == 0:
-
-                        h = torch.einsum("ab,bc->ac", [input, self.weights[0]])
+                        current_input = spike_train[t]
+                        h = torch.einsum("ab,bc->ac", [current_input, self.weights[0]])
                     else:
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]])
 
@@ -291,8 +293,7 @@ class DSNN(nn.Module):
         elif ( self.encoding == "fre"):
             spike_train = self.encode_fre(input)
         else:
-            transformed_input = input.unsqueeze(dim=1).float()
-            spike_train = transformed_input.repeat( self.simulation_time, 1, 1)
+            spike_train = input.repeat(self.simulation_time, 1, 1)
 
         return spike_train
 
