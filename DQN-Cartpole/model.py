@@ -94,8 +94,9 @@ class SurrGradSpike(torch.autograd.Function):
 
 
 class DSNN(nn.Module):
-    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = MinMaxScaler,
-                 two_neuron = False, population_coding = False, population_size=1, add_bias = True, encoding="potential", decoding="potential" ):
+    def __init__(self, architecture, seed, alpha, beta, batch_size, threshold, simulation_time, scaler = None,
+                 two_neuron = False, population_coding = False, population_size=1, add_bias = False, encoding="potential", decoding="potential" ):
+
         """
 
         """
@@ -173,7 +174,6 @@ class DSNN(nn.Module):
 
             # We take the input as it is, multiply is by the weights, and we inject the outcome
             # as current in the neurons of the first hidden layer
-            
 
             # loop over layers
             for l in range(len(self.weights)):
@@ -186,8 +186,8 @@ class DSNN(nn.Module):
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]*64])
                 else:
                     if l == 0:
-                        input = spike_train[t]
-                        h = torch.einsum("ab,bc->ac", [input, self.weights[0]])
+                        current_input = spike_train[t]
+                        h = torch.einsum("ab,bc->ac", [current_input, self.weights[0]])
                     else:
                         h = torch.einsum("ab,bc->ac", [spk_rec[-1][l - 1], self.weights[l]])
 
@@ -232,7 +232,7 @@ class DSNN(nn.Module):
 
         Keyword args:
         tau -- The membrane time constant of the LIF neuron to be charged
-        tmax -- The maximum time returned 
+        tmax -- The maximum time returned
         epsilon -- A generic (small) epsilon > 0
 
         Returns:
@@ -250,7 +250,7 @@ class DSNN(nn.Module):
 
         shifted_array = inputs - [ element[0] for element in limits]
         normalized_array = shifted_array / differences
-        
+
         return normalized_array
 
     def transform_two_inputs(self, inputs):
@@ -293,9 +293,7 @@ class DSNN(nn.Module):
         elif ( self.encoding == "fre"):
             spike_train = self.encode_fre(input)
         else:
-            transformed_input = input.unsqueeze(dim=1).float()
-            spike_train = transformed_input.repeat( self.simulation_time, 1, 1)
-
+            spike_train = input.repeat(self.simulation_time, 1, 1)
         return spike_train
 
     def encode_poisson(self, transformed_input):
@@ -368,14 +366,6 @@ class DSNN(nn.Module):
             return mem_rec[-1][-1]  ##TODO
         else:
             return mem_rec[-1][-1]
-
-    def init_scaler(self):
-        #[position of cart, velocity of cart, angle of pole, rotation rate of pole]
-        limits = np.asarray([[-5, -3, -0.21 , -3],
-                              [5, 3 , 0.21, -3]])
-        self.scaler = MinMaxScaler()
-        # transform data
-        self.scaler.fit(limits)
 
     def plot_voltage_traces(self, mem, spk=None, dim=(1, 1), spike_height=5):
         gs = GridSpec(*dim)
